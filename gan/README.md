@@ -2,6 +2,15 @@ This does the GAN training.
 
 This code is based on [carpedm20/DCGAN-tensorflow](https://github.com/carpedm20/DCGAN-tensorflow). Hsiao-Yu Tung (sfish0101@gmail.com) did most of the modifications for the paper; feel free to contact her and/or Dougal Sutherland (dougal@gmail.com) with any questions. (Issues here are fine too.)
 
+## Requirements
+
+added by kensuke. Checked with the below tensorflow.
+
+```
+tensorflow            1.15.0
+tensorflow-estimator  1.15.1
+```
+
 ## Basic Usage:
 
 First download the MNIST files with `data/mnist/fetch.sh`.

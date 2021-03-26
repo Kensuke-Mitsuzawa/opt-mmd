@@ -64,7 +64,6 @@ class DCGAN(object):
         self.dataset_name = dataset_name
         self.build_model()
 
-
     def imageRearrange(self, image, block=4):
         image = tf.slice(image, [0, 0, 0, 0], [block * block, -1, -1, -1])
         x1 = tf.batch_to_space(image, [[0, 0], [0, 0]], block)
@@ -118,8 +117,11 @@ class DCGAN(object):
             data = glob(os.path.join("./data", config.dataset, "*.jpg"))
 
         if self.config.use_kernel:
-            kernel_optim = tf.train.MomentumOptimizer(self.lr, 0.9) \
+            with tf.variable_scope(tf.get_variable_scope(), reuse=tf.AUTO_REUSE):
+                kernel_optim = tf.train.MomentumOptimizer(self.lr, 0.9) \
                       .minimize(self.ratio_loss, var_list=self.g_vars, global_step=self.global_step)
+            # end with
+        # end if
 
         self.sess.run(tf.global_variables_initializer())
         TrainSummary = tf.summary.merge_all()
