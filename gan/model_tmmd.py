@@ -73,7 +73,6 @@ class DCGAN(object):
             [1, self.output_size * block, self.output_size * block, self.c_dim])
         return image_r
 
-
     def build_model(self):
         self.global_step = tf.Variable(0, name="global_step", trainable=False)
         self.lr = tf.placeholder(tf.float32, shape=[])
