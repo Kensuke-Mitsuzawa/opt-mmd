@@ -16,16 +16,13 @@ _eps = 1e-8
 
 def _mix_rbf_kernel(X: tf.Tensor,
                     Y: tf.Tensor,
-                    sigmas: typing.Sequence[float],
-                    wts=None) -> typing.Tuple[typing.Optional[tf.Tensor], typing.Optional[tf.Tensor],
+                    sigmas: tf.Tensor,
+                    wt = 1) -> typing.Tuple[typing.Optional[tf.Tensor], typing.Optional[tf.Tensor],
                                               typing.Optional[tf.Tensor], tf.Tensor]:
     """compute terms that is needed to calculate V_m(P, Q) of MMD. See Eq(5) in Sutherland, 2017.
 
      :return: (K_XX, K_XY, K_YY, tf.reduce_sum(wts))
     """
-    if wts is None:
-        wts = [1] * len(sigmas)
-
     # tf.matmul; dot-product between matrices
     XX = tf.matmul(X, X, transpose_b=True)
     XY = tf.matmul(X, Y, transpose_b=True)
@@ -42,20 +39,19 @@ def _mix_rbf_kernel(X: tf.Tensor,
     K_XY: tf.Tensor = tf.zeros(XY.shape)
     K_YY: tf.Tensor = tf.zeros(YY.shape)
 
-    for sigma, wt in zip(sigmas, wts):
-        gamma = 1 / (2 * sigma**2)
-        K_XX += wt * tf.exp(-gamma * (-2 * XX + c(X_sqnorms) + r(X_sqnorms)))
-        K_XY += wt * tf.exp(-gamma * (-2 * XY + c(X_sqnorms) + r(Y_sqnorms)))
-        K_YY += wt * tf.exp(-gamma * (-2 * YY + c(Y_sqnorms) + r(Y_sqnorms)))
+    gamma = 1 / (2 * sigmas**2)
+    K_XX += wt * tf.exp(-gamma * (-2 * XX + c(X_sqnorms) + r(X_sqnorms)))
+    K_XY += wt * tf.exp(-gamma * (-2 * XY + c(X_sqnorms) + r(Y_sqnorms)))
+    K_YY += wt * tf.exp(-gamma * (-2 * YY + c(Y_sqnorms) + r(Y_sqnorms)))
 
-    return K_XX, K_XY, K_YY, tf.reduce_sum(wts)
+    return K_XX, K_XY, K_YY, tf.reduce_sum(1)
 
 
 def rbf_mmd2(X, Y, sigma=1, biased=True):
     return mix_rbf_mmd2(X, Y, sigmas=[sigma], biased=biased)
 
 
-def mix_rbf_mmd2(X, Y, sigmas=(1,), wts=None, biased=True):
+def mix_rbf_mmd2(X, Y, sigmas=(1,), wts=1, biased=True):
     K_XX, K_XY, K_YY, d = _mix_rbf_kernel(X, Y, sigmas, wts)
     return _mmd2(K_XX, K_XY, K_YY, const_diagonal=d, biased=biased)
 
@@ -67,8 +63,8 @@ def rbf_mmd2_and_ratio(X, Y, sigma=1, biased=True):
 def mix_rbf_mmd2_and_ratio(X: tf.Tensor,
                            Y: tf.Tensor,
                            sigmas: typing.Union[typing.Sequence[int], tf.Tensor] = (1,),
-                           wts=None,
-                           biased=True):
+                           wts=1,
+                           biased=True) -> typing.Tuple[tf.Tensor, tf.Tensor]:
     """
 
     :param X: A matrix that contains MNIST image.
@@ -78,7 +74,7 @@ def mix_rbf_mmd2_and_ratio(X: tf.Tensor,
     :param biased: unknown
     :return:
     """
-    K_XX, K_XY, K_YY, d = _mix_rbf_kernel(X, Y, sigmas, wts)
+    K_XX, K_XY, K_YY, d = _mix_rbf_kernel(X, Y, sigmas)
     return _mmd2_and_ratio(K_XX, K_XY, K_YY, const_diagonal=d, biased=biased)
 
 
@@ -206,3 +202,43 @@ def _mmd2_and_variance(K_XX: tf.Tensor,
     )
 
     return mmd2, var_est
+
+
+def test():
+    batch_size = 64
+    # todo これをplaceholderにして、あとから代入するべきかもしれない。
+    x_samples = tf.random.normal([500, 28, 28, 1], 0, 1, tf.float32, seed=1)
+    y_samples = tf.random.normal([500, 28, 28, 1], 0, 5, tf.float32, seed=1)
+    x_samples_reshape = tf.reshape(x_samples, [batch_size, -1])
+    y_samples_reshape = tf.reshape(y_samples, [batch_size, -1])
+    sigma_parameter = tf.Variable(initial_value=6.0, name='sigma_parameter', trainable=True)
+    # todo how to tune the best parameter??
+    kernel_loss, ratio_loss = mix_rbf_mmd2_and_ratio(x_samples_reshape, y_samples_reshape, sigmas=sigma_parameter)
+    tf.summary.scalar("kernel_loss", kernel_loss)
+    tf.summary.scalar("ratio_loss", ratio_loss)
+    kernel_loss = tf.sqrt(kernel_loss)
+
+    lr = tf.constant(0.5, tf.float32)
+    global_step = tf.Variable(0, name="global_step", trainable=False)
+    t_vars = tf.trainable_variables()
+
+    with tf.variable_scope(tf.get_variable_scope(), reuse=tf.AUTO_REUSE):
+        kernel_optim = tf.train.MomentumOptimizer(lr, 0.9).minimize(ratio_loss, global_step=global_step, var_list=t_vars)
+    # end with
+
+    # todo イテレーション式にして、バッチごとの処理にするべきかもしれない。
+    with tf.Session() as sess:
+        sess.run(tf.compat.v1.global_variables_initializer())
+        for it in range(10):
+            _ , step, ratio_loss = sess.run([kernel_optim, global_step, ratio_loss])
+            optimal_sigma_value = sess.run(sigma_parameter)
+            print(optimal_sigma_value)
+
+    # using tuned parameter
+    with tf.Session() as sess:
+        kernel_loss, ratio_loss = mix_rbf_mmd2_and_ratio(x_samples_reshape, y_samples_reshape, sigmas=optimal_sigma_value)
+        print(sess.run(kernel_loss), sess.run(ratio_loss))
+
+
+if __name__ == '__main__':
+    test()

@@ -8,6 +8,7 @@ from __future__ import division, print_function
 import os
 
 import numpy as np
+import typing
 from scipy import linalg, stats
 try:
     import modshogun as sg
@@ -22,8 +23,12 @@ else:
 sg.get_global_parallel().set_num_threads(num_threads)
 
 
-def rbf_mmd_test(X, Y, bandwidth='median', null_samples=1000,
-                 median_samples=1000, cache_size=32):
+def rbf_mmd_test(X,
+                 Y,
+                 bandwidth: typing.Union[str, float] = 'median',
+                 null_samples: int = 1000,
+                 median_samples: int = 1000,
+                 cache_size: int = 32):
     '''
     Run an MMD test using a Gaussian kernel.
 
