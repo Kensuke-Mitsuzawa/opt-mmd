@@ -17,7 +17,7 @@ except ImportError:
 
 
 def load_network(results_file, n_test=None):
-    with np.load(results_file) as d:
+    with np.load(results_file, allow_pickle=True) as d:
         args = d['args'][()]
         params = d['params'] if 'params' in d else d['net_params']
         sigma_val = d['sigma'][()]

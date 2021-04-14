@@ -176,7 +176,7 @@ def run_train_epoch(X_train, Y_train, batchsize, train_fn):
     total_mmd2 = 0
     total_obj = 0
     n_batches = 0
-    batches = itertools.izip( # shuffle the two independently
+    batches = zip( # shuffle the two independently
         iterate_minibatches(X_train, batchsize=batchsize, shuffle=True),
         iterate_minibatches(Y_train, batchsize=batchsize, shuffle=True),
     )
@@ -316,6 +316,7 @@ def train(X_train, Y_train, X_val, Y_val,
         if log_params:
             tup += ([p.get_value() for p in params],)
         value_log[epoch] = tup
+    # end def
 
     t_mmd2, t_obj = run_val(X_train, Y_train, batchsize, val_fn)
     v_mmd2, v_obj = run_val(X_val, Y_val, val_batchsize, val_fn)

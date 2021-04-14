@@ -13,7 +13,8 @@ flags.DEFINE_float("kernel_d_learning_rate", 2, "Learning rate g-d ratio [2]")
 flags.DEFINE_float("decay_rate", 1.0, "Decay rate for Learning rate [1.0]")
 flags.DEFINE_float("beta1", 0.5, "Momentum term of adam [0.5]")
 flags.DEFINE_float("init", 0.02, "Initialization value [0.02]")
-flags.DEFINE_integer("train_size", np.inf, "The size of train images [np.inf]")
+# flags.DEFINE_integer("train_size", np.inf, "The size of train images [np.inf]")
+flags.DEFINE_float("train_size", np.inf, "The size of train images [np.inf]")
 flags.DEFINE_integer("batch_size", 1000, "The size of batch images [64]")
 flags.DEFINE_integer("output_size", 64, "The size of the output images to produce [64]")
 flags.DEFINE_integer("c_dim", 3, "Dimension of image color. [3]")
@@ -21,7 +22,7 @@ flags.DEFINE_string("dataset", "mnist", "The name of dataset [celebA, mnist, lsu
 flags.DEFINE_string("name", "mmd_fm_test", "The name of dataset [celebA, mnist, lsun]")
 flags.DEFINE_string("checkpoint_dir", "checkpoint_mmd_fm", "Directory name to save the checkpoints [checkpoint_mmd_fm]")
 flags.DEFINE_string("sample_dir", "samples_mmd_fm", "Directory name to save the image samples [samples_mmd_fm]")
-flags.DEFINE_string("log_dir", "logs_mmd_fm", "Directory name to save the tensorboard log [logs_mmd_fm]")
+# flags.DEFINE_string("log_dir", "logs_mmd_fm", "Directory name to save the tensorboard log [logs_mmd_fm]")
 flags.DEFINE_boolean("is_train", False, "True for training, False for testing [False]")
 flags.DEFINE_boolean("is_crop", False, "True for training, False for testing [False]")
 flags.DEFINE_boolean("visualize", False, "True for visualizing, False for nothing [False]")
@@ -71,6 +72,9 @@ def main(_):
             # Below is codes for visualization
             OPTION = 2
             visualize(sess, dcgan, FLAGS, OPTION)
+        else:
+            print("end successfully")
+
 
 if __name__ == '__main__':
     tf.app.run()

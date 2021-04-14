@@ -98,8 +98,12 @@ class DCGAN(object):
             for layer_id in range(n_layer):
                 with tf.variable_scope("dk_att_" + str(layer_id)):
                     dk_att = tf.get_variable(
-                        "weight", [len(bandwidths)], tf.float32,
-                        tf.constant_initializer(1 / len(bandwidths)))
+                        name="weight",
+                        shape=[len(bandwidths)], dtype=tf.float32,
+                        initializer=tf.constant_initializer(1 / len(bandwidths)))
+                # end with
+            # end for
+        # end if
         phi_G = self.discriminator_k(G, reuse=True)
         self.kernel_loss = tf.Variable(0.0, trainable=False, name="kernel_loss")
 
@@ -115,6 +119,7 @@ class DCGAN(object):
                     phi_G[layer_id], phi_images[layer_id],
                     sigmas=bandwidths,
                     wts=tf.exp(dk_att) / tf.reduce_sum(tf.exp(dk_att)))
+            # end for
         elif self.config.use_layer_kernel:
             n_layer = len(phi_images)
             for layer_id in range(n_layer):
@@ -122,11 +127,13 @@ class DCGAN(object):
                     phi_G[layer_id], phi_images[layer_id], sigmas=bandwidths)
                 tf.summary.scalar("kernel_loss_" + str(layer_id), kernel_loss)
                 self.kernel_loss += kernel_loss #pow(2, n_layer) * kernel_loss
+            # end for
             if self.config.use_gan:
                 self.d_loss_real = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(phi_images[-1], tf.ones_like(phi_images[-1])))
                 self.d_loss_fake = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(phi_G[-1], tf.zeros_like(phi_G[-1])))
                 self.d_loss = self.d_loss_real + self.d_loss_fake
                 tf.summary.scalar("d_loss", self.d_loss)
+            # end if
         else:
             if self.config.use_gan:
                 self.d_loss_real = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(phi_images[-1], tf.ones_like(phi_images[-1])))
@@ -139,10 +146,12 @@ class DCGAN(object):
                 phi_images = tf.concat(1, phi_images[0:-1])
 
                 print("use_gan")
+            # end if
             phi_G = [phi_G]
             phi_images = [phi_images]
             n_layer = 1
             self.kernel_loss = mix_rbf_mmd2(phi_G[0], phi_images[0], sigmas=bandwidths)
+        # end if
         tf.summary.scalar("kernel_loss", self.kernel_loss)
         self.kernel_loss = tf.sqrt(self.kernel_loss)
 
@@ -165,15 +174,18 @@ class DCGAN(object):
         else:
             data = glob(os.path.join("./data", config.dataset, "*.jpg"))
         if self.config.use_kernel:
-            kernel_g_optim = tf.train.MomentumOptimizer(self.lr, 0.9) \
-                      .minimize(self.kernel_loss, var_list=self.g_vars, global_step=self.global_step)
-            if self.config.use_gan:
-                kernel_d_optim = tf.train.MomentumOptimizer(self.config.kernel_d_learning_rate * self.lr, 0.9) \
-                      .minimize(self.d_loss, var_list=self.dk_vars)
-            else:
-                kernel_d_optim = tf.train.MomentumOptimizer(self.config.kernel_d_learning_rate * self.lr, 0.9) \
-                        .minimize((-1) * self.kernel_loss, var_list=self.dk_vars)
-
+            with tf.variable_scope(tf.get_variable_scope(), reuse=tf.AUTO_REUSE):
+                kernel_g_optim = tf.train.MomentumOptimizer(self.lr, 0.9) \
+                          .minimize(self.kernel_loss, var_list=self.g_vars, global_step=self.global_step)
+                if self.config.use_gan:
+                    kernel_d_optim = tf.train.MomentumOptimizer(self.config.kernel_d_learning_rate * self.lr, 0.9) \
+                          .minimize(self.d_loss, var_list=self.dk_vars)
+                else:
+                    kernel_d_optim = tf.train.MomentumOptimizer(self.config.kernel_d_learning_rate * self.lr, 0.9) \
+                            .minimize((-1) * self.kernel_loss, var_list=self.dk_vars)
+                # end if
+            # end with
+        # end if
         self.sess.run(tf.global_variables_initializer())
         TrainSummary = tf.summary.merge_all()
         self.writer = tf.summary.FileWriter(self.log_dir, self.sess.graph)
@@ -291,10 +303,9 @@ class DCGAN(object):
         elif self.config.use_scale_kernel:
           return tf.concat(1, [image, (28.0 * 28.0/512.0) * h0, (28 * 28.0/256.0) * h1, (28.0 * 28.0/256.0) * h2, (28.0 * 28.0/128.0) * h3,
  (28.0 * 28.0/64.0) * h4])
-
         else:
           return tf.concat(1, [image, h0, h1, h2, h3, h4])
-
+        # end if
 
     def discriminator(self, image, y=None, reuse=False):
         if reuse:

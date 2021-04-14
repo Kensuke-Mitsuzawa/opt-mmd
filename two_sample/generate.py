@@ -248,7 +248,8 @@ def generate_data(args, n, dtype=None, rs=None):
         X, Y = sample_blobs(n, args.blobs, rs=rs)
     elif args.mnist_minibatch_gan is not None:
         X, Y = sample_mnist_minibatch_gan(
-            n, args.mnist2_gan, rs=rs, grayscale=args.grayscale, bw=args.bw,
+            #n, args.mnist2_gan, rs=rs, grayscale=args.grayscale, bw=args.bw,
+            n, args.mnist_minibatch_gan, rs=rs, grayscale=args.grayscale, bw=args.bw,
             trim_edges=args.trim_edges, clip=args.clip, scaled=args.scaled,
             discretize=args.discretize)
     elif args.mnist_traintest:
