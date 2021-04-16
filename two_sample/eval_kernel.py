@@ -54,12 +54,14 @@ def eval_network(get_rep, gen_data, n_reps=10, null_samples=1000, n_test=None,
     t = range(n_reps)
     if have_pb:
         t = pb.ProgressBar()(t)
+    # end if
     for i in t:
         X, Y = gen_data(n=n_test, dtype=np.float32)
         p_val, _, _ = learn_kernel.eval_rep(
             get_rep, X, Y, linear_kernel=linear_kernel, sigma=sigma,
             hotelling=hotelling, null_samples=null_samples)
         yield p_val
+    # end for
 
 
 def main():
