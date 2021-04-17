@@ -13,6 +13,7 @@ If you just want to call them, do e.g.:
 '''
 from __future__ import division
 import numpy as np
+import theano.tensor
 import theano.tensor as T
 from theano.tensor import slinalg
 
@@ -50,7 +51,10 @@ def rbf_mmd2(X, Y, sigma=0, biased=True):
     return mmd2, mmd2
 
 
-def rbf_mmd2_and_ratio(X, Y, sigma=0, biased=True):
+def rbf_mmd2_and_ratio(X: theano.tensor.TensorVariable,
+                       Y: theano.tensor.TensorVariable,
+                       sigma=0,
+                       biased=True):
     gamma = 1 / (2 * sigma**2)
 
     XX = T.dot(X, X.T)
@@ -59,7 +63,7 @@ def rbf_mmd2_and_ratio(X, Y, sigma=0, biased=True):
 
     X_sqnorms = T.diagonal(XX)
     Y_sqnorms = T.diagonal(YY)
-
+    # todo is it a kernel function including ARD weights ??
     K_XY = T.exp(-gamma * (
             -2 * XY + X_sqnorms[:, np.newaxis] + Y_sqnorms[np.newaxis, :]))
     K_XX = T.exp(-gamma * (

@@ -7,6 +7,7 @@ import sys
 import tempfile
 import time
 import types
+import typing
 
 import numpy as np
 import lasagne
@@ -17,6 +18,9 @@ import theano.tensor as T
 
 import generate
 import mmd
+
+from nptyping import NDArray
+from typing import Any
 
 
 floatX = np.dtype(theano.config.floatX)
@@ -105,33 +109,45 @@ def register_custom_net(code):
 ################################################################################
 ### Adding loss and so on to the network
 
-def make_network(input_p, input_q, dim,
-                 criterion='mmd', biased=True, streaming_est=False,
+def make_network(input_p: theano.tensor.TensorVariable,
+                 input_q: theano.tensor.TensorVariable,
+                 dim: int,
+                 criterion='ratio', biased=True, streaming_est=False,
                  linear_kernel=False, log_sigma=0, hotelling_reg=0,
                  opt_log=True, batchsize=None,
                  net_version='nothing'):
 
+    # --------------------------
+    # definition of layers which convert input-Data(X, Y) into weighted-value.
+    # The operation corresponds with 'z' function.
     in_p = lasagne.layers.InputLayer(shape=(batchsize, dim), input_var=input_p)
     in_q = lasagne.layers.InputLayer(shape=(batchsize, dim), input_var=input_q)
-    net_p, net_q, reg = net_versions[net_version](in_p, in_q)
+    # note: net_versions is global variable. A dict object. A key is string, A value is function.
+    # in_p, in_q are arguments into functions.
+    # net_p, net_q, reg = net_versions[net_version](in_p, in_q)
+    # a layer to scale the in_p and in_q.
+    # scales variable corresponds with 'z' function in the paper.
+    net_p, net_q, reg = net_scaling(in_p, in_q)
     rep_p, rep_q = lasagne.layers.get_output([net_p, net_q])
+    # --------------------------
 
-    choices = {  # criterion, linear kernel, streaming
-        ('mmd', False, False): mmd.rbf_mmd2,
-        ('mmd', False, True): mmd.rbf_mmd2_streaming,
-        ('mmd', True, False): mmd.linear_mmd2,
-        ('ratio', False, False): mmd.rbf_mmd2_and_ratio,
-        ('ratio', False, True): mmd.rbf_mmd2_streaming_and_ratio,
-        ('ratio', True, False): mmd.linear_mmd2_and_ratio,
-        ('hotelling', True, False): mmd.linear_mmd2_and_hotelling,
-    }
-    try:
-        fn = choices[criterion, linear_kernel, streaming_est]
-    except KeyError:
-        raise ValueError("Bad parameter combo: criterion = {}, {}, {}".format(
-            criterion,
-            "linear kernel" if linear_kernel else "rbf kernel",
-            "streaming" if streaming_est else "not streaming"))
+    # definition of MMD (in variations)
+    # choices = {  # criterion, linear kernel, streaming
+    #     ('mmd', False, False): mmd.rbf_mmd2,
+    #     ('mmd', False, True): mmd.rbf_mmd2_streaming,
+    #     ('mmd', True, False): mmd.linear_mmd2,
+    #     ('ratio', False, False): mmd.rbf_mmd2_and_ratio,
+    #     ('ratio', False, True): mmd.rbf_mmd2_streaming_and_ratio,
+    #     ('ratio', True, False): mmd.linear_mmd2_and_ratio,
+    #     ('hotelling', True, False): mmd.linear_mmd2_and_hotelling,
+    # }
+    # try:
+    #     fn = choices[criterion, linear_kernel, streaming_est]
+    # except KeyError:
+    #     raise ValueError("Bad parameter combo: criterion = {}, {}, {}".format(
+    #         criterion,
+    #         "linear kernel" if linear_kernel else "rbf kernel",
+    #         "streaming" if streaming_est else "not streaming"))
 
     kwargs = {}
     if linear_kernel:
@@ -144,7 +160,8 @@ def make_network(input_p, input_q, dim,
     if criterion == 'hotelling':
         kwargs['reg'] = hotelling_reg
 
-    mmd2_pq, stat = fn(rep_p, rep_q, **kwargs)
+    mmd2_pq, stat = mmd.rbf_mmd2_and_ratio(X=rep_p, Y=rep_q, **kwargs)
+    # obj is "objective" value.
     obj = -(T.log(T.largest(stat, 1e-6)) if opt_log else stat) + reg
     return mmd2_pq, obj, rep_p, net_p, net_q, log_sigma
 
@@ -172,7 +189,7 @@ def iterate_minibatches(*arrays, **kwds):
         yield tuple(a[excerpt] for a in arrays)
 
 
-def run_train_epoch(X_train, Y_train, batchsize, train_fn):
+def run_train_epoch(X_train, Y_train, batchsize, train_fn) -> typing.Tuple[float, float]:
     total_mmd2 = 0
     total_obj = 0
     n_batches = 0
@@ -190,7 +207,7 @@ def run_train_epoch(X_train, Y_train, batchsize, train_fn):
     return total_mmd2 / n_batches, total_obj / n_batches
 
 
-def run_val(X_val, Y_val, batchsize, val_fn):
+def run_val(X_val, Y_val, batchsize, val_fn) -> typing.Tuple[float, float]:
     total_mmd2 = 0
     total_obj = 0
     n_batches = 0
@@ -202,16 +219,43 @@ def run_val(X_val, Y_val, batchsize, val_fn):
         total_mmd2 += mmd2
         total_obj += obj
         n_batches += 1
+    # end for
     return total_mmd2 / n_batches, total_obj / n_batches
 
 
 ################################################################################
 ### Main deal
 
-def setup(dim, criterion='mmd', biased=True, streaming_est=False, opt_log=True,
-          linear_kernel=False, opt_sigma=False, init_log_sigma=0,
-          net_version='basic', hotelling_reg=0,
-          strat='nesterov_momentum', learning_rate=0.01, **opt_args):
+def setup(dim,
+          criterion='ratio',
+          biased=True,
+          streaming_est=False,
+          opt_log=True,
+          linear_kernel=False,
+          opt_sigma=False,
+          init_log_sigma=0,
+          net_version='basic',
+          hotelling_reg=0,
+          strat='nesterov_momentum',
+          learning_rate=0.01, **opt_args):
+    """
+
+    :param dim:
+    :param criterion:
+    :param biased:
+    :param streaming_est:
+    :param opt_log:
+    :param linear_kernel:
+    :param opt_sigma:
+    :param init_log_sigma:
+    :param net_version:
+    :param hotelling_reg:
+    :param strat:
+    :param learning_rate:
+    :param opt_args:
+    :return:
+    """
+    # definition of input variable.
     input_p = T.matrix('input_p')
     input_q = T.matrix('input_q')
 
@@ -220,31 +264,45 @@ def setup(dim, criterion='mmd', biased=True, streaming_est=False, opt_log=True,
         criterion=criterion, biased=biased, streaming_est=streaming_est,
         opt_log=opt_log, linear_kernel=linear_kernel, log_sigma=init_log_sigma,
         hotelling_reg=hotelling_reg, net_version=net_version)
-
-    params = lasagne.layers.get_all_params([net_p, net_q], trainable=True)
+    # Returns a list of Theano shared variables or expressions that parameterize the layer.
+    params: typing.List[theano.tensor.sharedvar.TensorSharedVariable] = \
+        lasagne.layers.get_all_params([net_p, net_q], trainable=True)
     if opt_sigma:
         params.append(log_sigma)
+    # end if
+
+    # definition of gradient-search.
+    # generate a function-object which can take arguments.
     fn = getattr(lasagne.updates, strat)
-    updates = fn(obj, params, learning_rate=learning_rate, **opt_args)
+    # updates(return of lasagne.updates) is a dictionary-obj. The dict-obj is with keys:
+    updates: typing.Dict[theano.tensor.sharedvar.TensorSharedVariable, theano.tensor.var.TensorVariable] = \
+        fn(obj, params, learning_rate=learning_rate, **opt_args)
 
     print("Compiling...", file=sys.stderr, end='')
+    # a function for training. updates,
+    # updates is key-value objects. The key a name of variable, the value is a way to update the variable.
     train_fn = theano.function(
-        [input_p, input_q], [mmd2_pq, obj], updates=updates)
-    val_fn = theano.function([input_p, input_q], [mmd2_pq, obj])
-    get_rep = theano.function([input_p], rep_p)
+        inputs=[input_p, input_q], outputs=[mmd2_pq, obj], updates=updates)
+    val_fn = theano.function(inputs=[input_p, input_q], outputs=[mmd2_pq, obj])
+    get_rep = theano.function(inputs=[input_p], outputs=rep_p)
     print("done", file=sys.stderr)
 
     return params, train_fn, val_fn, get_rep, log_sigma
 
 
-def train(X_train, Y_train, X_val, Y_val,
-          criterion='mmd', biased=True, streaming_est=False, opt_log=True,
+def train(X_train: NDArray[(Any, Any), Any],
+          Y_train: NDArray[(Any, Any), Any],
+          X_val: NDArray[(Any, Any), Any],
+          Y_val: NDArray[(Any, Any), Any],
+          criterion='ratio',
+          biased=True, streaming_est=False, opt_log=True,
           linear_kernel=False, hotelling_reg=0,
           init_log_sigma=0, opt_sigma=False, init_sigma_median=False,
           num_epochs=10000, batchsize=200, val_batchsize=1000,
           verbose=True, net_version='basic',
           opt_strat='nesterov_momentum', learning_rate=0.01,
           log_params=False, **opt_args):
+    # assert in order to check objects are 2nd order Tensor.
     assert X_train.ndim == X_val.ndim == Y_train.ndim == Y_val.ndim == 2
     dim = X_train.shape[1]
     assert X_val.shape[1] == Y_train.shape[1] == Y_val.shape[1] == dim
@@ -257,7 +315,7 @@ def train(X_train, Y_train, X_val, Y_val,
     else:
         print("Using sigma = {}".format(
             'median' if init_sigma_median else np.exp(init_log_sigma)))
-
+    # definition of graph
     params, train_fn, val_fn, get_rep, log_sigma = setup(
             dim, criterion=criterion, linear_kernel=linear_kernel,
             biased=biased, streaming_est=streaming_est,
@@ -266,6 +324,7 @@ def train(X_train, Y_train, X_val, Y_val,
             opt_log=opt_log, net_version=net_version,
             strat=opt_strat, learning_rate=learning_rate, **opt_args)
 
+    # initialization of initial-sigma value
     if log_sigma is not None and init_sigma_median:
         print("Getting median initial sigma value...", end='')
         n_samp = min(500, X_train.shape[0], Y_train.shape[0])
@@ -284,6 +343,7 @@ def train(X_train, Y_train, X_val, Y_val,
         print("{:.3g}".format(np.exp(log_sigma.get_value())))
     else:
         rep_dim = get_rep(X_train[:1]).shape[1]
+    # end if
 
     print("Input dim {}, representation dim {}".format(
         X_train.shape[1], rep_dim))
@@ -292,17 +352,20 @@ def train(X_train, Y_train, X_val, Y_val,
     print("{} parameters to optimize: {}".format(
         len(params), ', '.join(p.name for p in params)))
 
+    # ndarray for log message
     value_log = np.zeros(num_epochs + 1, dtype=[
             ('train_mmd', floatX), ('train_obj', floatX),
             ('val_mmd', floatX), ('val_obj', floatX),
             ('elapsed_time', np.float64)]
             + ([('sigma', floatX)] if opt_sigma else [])
             + ([('params', object)] if log_params else []))
-
+    # format of log output
     fmt = ("{: >6,}: avg train MMD^2 {: .6f} obj {: .6f},  "
            "avg val MMD^2 {: .6f}  obj {: .6f}  elapsed: {:,}s")
     if opt_sigma:
         fmt += '  sigma: {sigma:.3g}'
+    # else
+
     def log(epoch, t_mmd2, t_obj, v_mmd2, v_job, t):
         sigma = np.exp(float(params[-1].get_value())) if opt_sigma else None
         if verbose and (epoch in {0, 5, 25, 50}
@@ -331,7 +394,8 @@ def train(X_train, Y_train, X_val, Y_val,
             log(epoch, t_mmd2, t_obj, v_mmd2, v_obj, time.time() - start_time)
         except KeyboardInterrupt:
             break
-
+        # end try
+    # end for
     sigma = np.exp(log_sigma.get_value()) if log_sigma is not None else None
     return ([p.get_value() for p in params], [p.name for p in params],
             get_rep, value_log, sigma)
@@ -355,49 +419,62 @@ def eval_rep(get_rep, X, Y, linear_kernel=False, hotelling=False,
     return p_val, stat, null_samps
 
 
+class TrainArdKernelTheano(object):
+    def __init__(self):
+        pass
+
+    def train(self):
+        pass
+
+    def test_2samples(self):
+        pass
+
+
 def main():
     import argparse
     parser = argparse.ArgumentParser(description='''
         Learn a kernel function to maximize the power of a two-sample test.
         '''.strip())
+    # todo following flags are mandatory --max_ratio, --opt-sigma
+
     net = parser.add_argument_group('Kernel options')
     g = net.add_mutually_exclusive_group()
-    g.add_argument('--net-version', choices=sorted(net_versions),
-                   default='nothing',
-                   help="How to represent the values before putting them in "
-                        "the kernel. Options defined in this file; "
-                        "default '%(default)s'.")
-    g.add_argument('--net-file',
-                   help="A Python file containing a net_custom function "
-                        "that does the representation; see existing options "
-                        "for examples. (Same API: net_custom(in_p, in_q) "
-                        "needs to return net_p, net_q, reg_term.)")
+    # g.add_argument('--net-version', choices=sorted(net_versions),
+    #                default='nothing',
+    #                help="How to represent the values before putting them in "
+    #                     "the kernel. Options defined in this file; "
+    #                     "default '%(default)s'.")
+    # g.add_argument('--net-file',
+    #                help="A Python file containing a net_custom function "
+    #                     "that does the representation; see existing options "
+    #                     "for examples. (Same API: net_custom(in_p, in_q) "
+    #                     "needs to return net_p, net_q, reg_term.)")
     g = net.add_mutually_exclusive_group(required=True)
     g.add_argument('--max-ratio', '-r',
                    dest='criterion', action='store_const', const='ratio',
                    help="Maximize the t-statistic estimator.")
-    g.add_argument('--max-mmd', '-m',
-                   dest='criterion', action='store_const', const='mmd',
-                   help="Maximize the MMD estimator.")
-    g.add_argument('--max-hotelling',
-                   dest='criterion', action='store_const', const='hotelling',
-                   help="Maximize the Hotelling test statistics; only works "
-                        "with a linear kernel.")
+    # g.add_argument('--max-mmd', '-m',
+    #                dest='criterion', action='store_const', const='mmd',
+    #                help="Maximize the MMD estimator.")
+    # g.add_argument('--max-hotelling',
+    #                dest='criterion', action='store_const', const='hotelling',
+    #                help="Maximize the Hotelling test statistics; only works "
+    #                     "with a linear kernel.")
 
     g = net.add_mutually_exclusive_group()
     g.add_argument('--rbf-kernel',
                    default=False, action='store_false', dest='linear_kernel',
                    help="Use an RBF kernel; true by default.")
-    g.add_argument('--linear-kernel', default=False, action='store_true')
+    # g.add_argument('--linear-kernel', default=False, action='store_true')
 
     g = net.add_mutually_exclusive_group()
     g.add_argument('--biased-est', default=True, action='store_true',
                    help="Use the biased quadratic MMD estimator.")
-    g.add_argument('--unbiased-est', dest='biased_est', action='store_false',
-                   help="Use the unbiased quadratic MMD estimator.")
-    g.add_argument('--streaming-est', default=False, action='store_true',
-                   help="Use the streaming estimator for the MMD; faster "
-                        "but much less powerful.")
+    # g.add_argument('--unbiased-est', dest='biased_est', action='store_false',
+    #                help="Use the unbiased quadratic MMD estimator.")
+    # g.add_argument('--streaming-est', default=False, action='store_true',
+    #                help="Use the streaming estimator for the MMD; faster "
+    #                     "but much less powerful.")
 
     net.add_argument('--hotelling-reg', type=float, default=0,
                      help="Regularization for the inverse in the Hotelling "
@@ -407,7 +484,7 @@ def main():
     g.add_argument('--opt-sigma', default=False, action='store_true',
                    help="Optimize the bandwidth of an RBF kernel; "
                         "default don't.")
-    g.add_argument('--no-opt-sigma', dest='opt_sigma', action='store_false')
+    # g.add_argument('--no-opt-sigma', dest='opt_sigma', action='store_false')
 
     g = net.add_mutually_exclusive_group()
     def context_eval(s):
@@ -433,6 +510,7 @@ def main():
     opt.add_argument('--learning-rate', type=float, default=.01)
     opt.add_argument('--opt-args', type=ast.literal_eval, default={})
 
+    # todo wanna delete these flags...
     data = parser.add_argument_group('Data')
     generate.add_problem_args(data)
     data.add_argument('--n-train', type=int, default=500)
@@ -477,6 +555,7 @@ def main():
         args.net_version = 'custom'
         args.net_code = code
 
+    # todo too many returns. I should break them smaller.
     params, param_names, get_rep, value_log, sigma = train(
         X_train, Y_train, X_test, Y_test,
         criterion=args.criterion,
@@ -499,6 +578,7 @@ def main():
     print("Testing...", end='')
     sys.stdout.flush()
     try:
+        # todo get_rep is a function obejct. This should be from an independent function.
         p_val, stat, null_samps = eval_rep(
             get_rep, X_test, Y_test,
             linear_kernel=args.linear_kernel, sigma=sigma,
@@ -535,5 +615,73 @@ def main():
         np.savez(name, **to_save)
 
 
+def example_ard_kernel():
+    n_train = 1500
+    n_test = 500
+    num_epochs = 1000
+    np.random.seed(np.random.randint(2**31))
+    # X, Y = generate.generate_data(args, n_train + n_test, dtype=floatX)
+    # as an example X, Y are from the same distribution.
+    X, Y = generate.sample_SG(n_train + n_test, dim=2)
+    is_train = np.zeros(n_train + n_test, dtype=bool)
+    is_train[np.random.choice(n_train + n_test, n_train, replace=False)] = True
+    X_train = X[is_train]
+    Y_train = Y[is_train]
+    X_test = X[~is_train]
+    Y_test = Y[~is_train]
+
+    params, param_names, get_rep, value_log, sigma = train(
+        X_train=X_train,
+        Y_train=Y_train,
+        X_val=X_test,
+        Y_val=Y_test,
+        criterion='ratio',
+        biased=True,
+        hotelling_reg=0,
+        init_log_sigma=0,
+        opt_sigma=True,
+        num_epochs=num_epochs,
+        batchsize=200,
+        val_batchsize=1000,
+        init_sigma_median=True,
+        net_version='scaling'
+    )
+
+    # todo check
+    print("Testing...", end='')
+    sys.stdout.flush()
+    try:
+        p_val, stat, null_samps = eval_rep(
+            get_rep=get_rep,
+            X=X_test,
+            Y=Y_test,
+            sigma=sigma,
+            hotelling=False,
+            null_samples=1000)
+        print("p-value: {}".format(p_val))
+    except ImportError as e:
+        print()
+        print("Couldn't import shogun:\n{}".format(e), file=sys.stderr)
+        p_val, stat, null_samps = None, None, None
+
+    # todo save the result?
+    to_save = dict(
+       null_samps=null_samps,
+       test_stat=stat,
+       sigma=sigma,
+       p_val=p_val,
+       params=params,
+       param_names=param_names,
+       X_train=X_train, X_test=X_test,
+       Y_train=Y_train, Y_test=Y_test,
+       value_log=value_log)
+
+    path_to_save = './data/example_ard_kernel.npz'
+    dirname = os.path.dirname(path_to_save)
+    if dirname and not os.path.isdir(dirname):
+        os.makedirs(dirname)
+    np.savez(path_to_save, **to_save)
+
 if __name__ == '__main__':
-    main()
+    # main()
+    example_ard_kernel()

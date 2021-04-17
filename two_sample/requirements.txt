@@ -12,3 +12,4 @@ jupyter_client
 nbconvert
 statsmodels
 progressbar2
+nptyping

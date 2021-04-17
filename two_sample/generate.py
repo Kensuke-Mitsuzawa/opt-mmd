@@ -4,11 +4,14 @@ import sys
 import numpy as np
 from sklearn.utils import check_random_state
 
+from nptyping import NDArray
+from typing import Any, Tuple
 
 ################################################################################
 ### Simple toy problems
 
-def sample_SG(n, dim, rs=None):
+
+def sample_SG(n: int, dim: int, rs=None) -> Tuple[NDArray[(Any, Any), Any], NDArray[(Any, Any), Any]]:
     rs = check_random_state(rs)
     mu = np.zeros(dim)
     sigma = np.eye(dim)
