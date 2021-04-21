@@ -419,17 +419,6 @@ def eval_rep(get_rep, X, Y, linear_kernel=False, hotelling=False,
     return p_val, stat, null_samps
 
 
-class TrainArdKernelTheano(object):
-    def __init__(self):
-        pass
-
-    def train(self):
-        pass
-
-    def test_2samples(self):
-        pass
-
-
 def main():
     import argparse
     parser = argparse.ArgumentParser(description='''
