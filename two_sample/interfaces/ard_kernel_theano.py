@@ -707,7 +707,7 @@ class ArdKernelTrainer(object):
             val_batchsize=val_batchsize,
             init_sigma_median=True,
             net_version='scaling')
-
+        self.get_rep = get_rep
         logger.info(f'Trained result: the opt global-sigma: {sigma}')
         result = TrainedArdKernel(
             sigma=sigma,
@@ -722,9 +722,9 @@ class ArdKernelTrainer(object):
              x: nptyping.NDArray[(typing.Any, typing.Any), typing.Any],
              y: nptyping.NDArray[(typing.Any, typing.Any), typing.Any],
              sigma: float):
-        assert self.get_rep is None, 'you do not have a network for test. Run train() first.'
+        assert self.get_rep is not None, 'you do not have a network for test. Run train() first.'
 
-        logger.info("Testing...", end='')
+        logger.info("Testing...")
         sys.stdout.flush()
         try:
             p_val, stat, null_samps = self.eval_rep(
