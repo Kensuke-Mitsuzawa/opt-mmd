@@ -20,6 +20,7 @@ from lasagne import init
 from nptyping import NDArray
 from typing import Any
 from logging import getLogger, StreamHandler, DEBUG
+from six.moves import cPickle
 logger = getLogger(__name__)
 handler = StreamHandler()
 handler.setLevel(DEBUG)
@@ -45,11 +46,20 @@ class TrainedArdKernel(object):
     training_log: nptyping.NDArray[(typing.Any,), typing.Any]
     x_train: typing.Optional[nptyping.NDArray[(typing.Any, typing.Any), typing.Any]] = None
     y_train: typing.Optional[nptyping.NDArray[(typing.Any, typing.Any), typing.Any]] = None
+    mapping_network: theano.compile.Function = None
 
     def to_npz(self, path_npz: str):
         assert os.path.exists(os.path.dirname(path_npz))
-        np.savez(path_npz, **dataclasses.asdict(self))
+        dict_obj = dataclasses.asdict(self)
+        del dict_obj['mapping_network']
+        np.savez(path_npz, **dict_obj)
         logger.info(f'saved as {path_npz}')
+
+    def to_pickle(self, path_pickle: str):
+        assert os.path.exists(os.path.dirname(path_pickle))
+        f = open(path_pickle, 'wb')
+        cPickle.dump(self, f, protocol=cPickle.HIGHEST_PROTOCOL)
+        f.close()
 
 
 def make_floatX(x):
@@ -274,7 +284,7 @@ class ArdKernelTrainer(object):
     def rbf_mmd2_and_ratio(self,
                            X: theano.tensor.TensorVariable,
                            Y: theano.tensor.TensorVariable,
-                           sigma=0,
+                           sigma: float=0,
                            biased=True):
         gamma = 1 / (2 * sigma ** 2)
 
@@ -296,7 +306,11 @@ class ArdKernelTrainer(object):
 
     def _mmd2_and_ratio(self,
                         K_XX, K_XY, K_YY, unit_diagonal=False, biased=False,
-                        min_var_est=_eps):
+                        min_var_est=_eps) -> typing.Tuple[theano.tensor.Elemwise, theano.tensor.Elemwise]:
+        """compute mmd^2 value and ratio(corresponding to t-value)
+
+        :return: (mmd^2, t-value)
+        """
         mmd2, var_est = self._mmd2_and_variance(
             K_XX, K_XY, K_YY, unit_diagonal=unit_diagonal, biased=biased)
         ratio = mmd2 / T.sqrt(T.largest(var_est, min_var_est))
@@ -714,17 +728,18 @@ class ArdKernelTrainer(object):
             scale_value=params[0],
             training_log=value_log,
             x_train=x_train,
-            y_train=y_train)
+            y_train=y_train,
+            mapping_network=self.get_rep)
 
         return result
 
-    def test(self,
-             x: nptyping.NDArray[(typing.Any, typing.Any), typing.Any],
-             y: nptyping.NDArray[(typing.Any, typing.Any), typing.Any],
-             sigma: float):
-        assert self.get_rep is not None, 'you do not have a network for test. Run train() first.'
+    # ------------------------------------------------------------------------------------
+    # tests with MMD
 
-        logger.info("Testing...")
+    def _test_via_shogun(self,
+                         x: nptyping.NDArray[(typing.Any, typing.Any), typing.Any],
+                         y: nptyping.NDArray[(typing.Any, typing.Any), typing.Any],
+                         sigma: float) -> typing.Tuple[float, float, float]:
         sys.stdout.flush()
         try:
             p_val, stat, null_samps = self.eval_rep(
@@ -733,11 +748,40 @@ class ArdKernelTrainer(object):
                 Y=y,
                 sigma=sigma,
                 null_samples=1000)
-            print("p-value: {}".format(p_val))
+            return p_val, stat, null_samps
         except ImportError as e:
             print()
             print("Couldn't import shogun:\n{}".format(e), file=sys.stderr)
             p_val, stat, null_samps = None, None, None
+            return p_val, stat, null_samps
+
+    def test_mmd(self,
+                 x: nptyping.NDArray[(typing.Any, typing.Any), typing.Any],
+                 y: nptyping.NDArray[(typing.Any, typing.Any), typing.Any],
+                 sigma: float,
+                 is_shogun_module: bool = True):
+        assert self.get_rep is not None, 'you do not have a network for test. Run train() first.'
+        logger.info("Testing...")
+        if is_shogun_module:
+            return self._test_via_shogun(x, y, sigma)
+        else:
+            raise NotImplementedError("Not implemented yet.")
+
+    # ------------------------------------------------------------------------------------------------
+    # compute MMD value
+
+    def compute_mmd(self,
+                    x: nptyping.NDArray[(typing.Any, typing.Any), typing.Any],
+                    y: nptyping.NDArray[(typing.Any, typing.Any), typing.Any],
+                    sigma: float) -> typing.Tuple[float, float]:
+        # note: no need to give scale-vector because self.get_rep() is a network to map: X -> scaled_X
+        x_rep = self.get_rep(x)
+        y_rep = self.get_rep(y)
+        __mmd2, __ratio = self.rbf_mmd2_and_ratio(X=x_rep, Y=y_rep, sigma=sigma)
+        mmd2 = __mmd2.eval()
+        ratio = __ratio.eval()
+        return mmd2, ratio
+
 
 # -------------------------------------------------------------------------------------------------------------------
 # examples
@@ -769,18 +813,26 @@ def generate_data(n_train: int, n_test: int):
 def example_ard_kernel():
     n_train = 1500
     n_test = 500
-    num_epochs = 1000
-    path_trained_model = './trained_mmd.npz'
+    num_epochs = 100
+    path_trained_model = './trained_mmd.pickle'
 
     np.random.seed(np.random.randint(2**31))
     x_train, y_train, x_test, y_test = generate_data(n_train=n_train, n_test=n_test)
 
     trainer = ArdKernelTrainer()
     trained_obj = trainer.train(x=x_train, y=y_train, num_epochs=num_epochs)
-    trained_obj.to_npz(path_trained_model)
+    trained_obj.to_pickle(path_trained_model)
 
-    logger.info('running 2 sample test...')
-    trainer.test(x_test, y_test, trained_obj.sigma)
+    mmd2, t_value = trainer.compute_mmd(x=x_test, y=y_test, sigma=trained_obj.sigma)
+    logger.info(f'MMD^2 = {mmd2}')
+
+    try:
+        import shogun
+        logger.info('running 2 sample test...')
+        p_val, stat, null_samps = trainer.test_mmd(x_test, y_test, trained_obj.sigma)
+        logger.info("p-value: {}".format(p_val))
+    except ImportError:
+        logger.info('Skip to run MMD test because of missing Shogun package.')
 
 
 if __name__ == '__main__':
