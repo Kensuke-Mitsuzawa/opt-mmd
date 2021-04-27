@@ -17,6 +17,21 @@ device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 TypeInputData = typing.Union[torch.Tensor, nptyping.NDArray[(typing.Any, typing.Any), typing.Any]]
 TypeScaleVector = nptyping.NDArray[(typing.Any, typing.Any), typing.Any]
 
+
+class TwoSampleDataSet(torch.utils.data.Dataset):
+    def __init__(self, x: torch.Tensor, y: torch.Tensor):
+        self.x = x
+        self.y = y
+        self.length = len(x)
+        assert len(x) == len(y)
+
+    def __getitem__(self, index):
+        return self.x[index], self.y[index]
+
+    def __len__(self):
+        return self.length
+
+
 # ----------------------------------------------------------------------
 # MMD equation
 
@@ -133,40 +148,78 @@ def rbf_mmd2_and_ratio(x: torch.Tensor, y: torch.Tensor, sigma=0, biased=True):
 
 
 # ----------------------------------------------------------------------
+# a procedure in an epoch
+
+def iterate_minibatches(*arrays, batchsize: int, is_shuffle: bool=False):
+    shuffle = is_shuffle
+
+    assert len(arrays) > 0
+    n = len(arrays[0])
+    assert all(len(a) == n for a in arrays[1:])
+
+    if shuffle:
+        indices = np.arange(n)
+        np.random.shuffle(indices)
+
+    for start_idx in range(0, max(0, n - batchsize) + 1, batchsize):
+        if shuffle:
+            excerpt = indices[start_idx:start_idx + batchsize]
+        else:
+            excerpt = slice(start_idx, start_idx + batchsize)
+        yield tuple(a[excerpt] for a in arrays)
 
 
-def run_train_epoch(X_train, Y_train, batchsize, train_fn) -> typing.Tuple[float, float]:
+def run_train_epoch(dataset: TwoSampleDataSet,
+                    batchsize: int,
+                    sigma: torch.Tensor,
+                    scaler: torch.Tensor,
+                    reg: int,
+                    opt_log: bool = True) -> typing.Tuple[torch.Tensor, torch.Tensor]:
     total_mmd2 = 0
     total_obj = 0
     n_batches = 0
-    batches = zip( # shuffle the two independently
-        iterate_minibatches(X_train, batchsize=batchsize, shuffle=True),
-        iterate_minibatches(Y_train, batchsize=batchsize, shuffle=True),
-    )
-    for ((Xbatch,), (Ybatch,)) in batches:
-        mmd2, obj = train_fn(Xbatch, Ybatch)
-        assert np.isfinite(mmd2)
-        assert np.isfinite(obj)
-        total_mmd2 += mmd2
+    # batches = zip( # shuffle the two independently
+    #     iterate_minibatches(x_train, batchsize=batchsize, is_shuffle=True),
+    #     iterate_minibatches(y_train, batchsize=batchsize, is_shuffle=True),
+    # )
+    data_loader = torch.utils.data.DataLoader(dataset, batch_size=batchsize, shuffle=True, num_workers=2)
+    for xbatch, ybatch in data_loader:
+        mmd2_pq, stat, obj = function_forward(xbatch, ybatch, sigma=sigma, scaler=scaler, reg=reg, opt_log=opt_log)
+        #assert np.isfinite(mmd2)
+        #assert np.isfinite(obj)
+        total_mmd2 += mmd2_pq
         total_obj += obj
         n_batches += 1
+        # do differentiation now.
+        obj.backward()
+
     return total_mmd2 / n_batches, total_obj / n_batches
 
 
-def run_val(X_val, Y_val, batchsize, val_fn) -> typing.Tuple[float, float]:
+def run_validation_epoch(dataset: TwoSampleDataSet,
+                         batchsize: int,
+                         sigma: torch.Tensor,
+                         scaler: torch.Tensor,
+                         reg: int,
+                         opt_log: bool = True) -> typing.Tuple[torch.Tensor, torch.Tensor]:
     total_mmd2 = 0
     total_obj = 0
     n_batches = 0
-    for (Xbatch, Ybatch) in iterate_minibatches(
-                X_val, Y_val, batchsize=batchsize):
-        mmd2, obj = val_fn(Xbatch, Ybatch)
-        assert np.isfinite(mmd2)
-        assert np.isfinite(obj)
-        total_mmd2 += mmd2
+    data_loader = torch.utils.data.DataLoader(dataset, batch_size=batchsize, shuffle=True, num_workers=2)
+    #for (x_batch, y_batch) in iterate_minibatches(x_val, y_val, batchsize=batchsize):
+    for x_batch, y_batch in data_loader:
+        mmd2_pq, stat, obj = function_forward(x_batch, y_batch, sigma=sigma, scaler=scaler, reg=reg, opt_log=opt_log)
+        #assert np.isfinite(mmd2)
+        #assert np.isfinite(obj)
+        total_mmd2 += mmd2_pq
         total_obj += obj
         n_batches += 1
     # end for
-    return total_mmd2 / n_batches, total_obj / n_batches
+    avg_mmd = total_mmd2 / n_batches
+    avg_obj = total_obj / n_batches
+    return avg_mmd, avg_obj
+
+
 
 # ----------------------------------------------------------------------
 
@@ -180,7 +233,7 @@ def operation_scale_product(scaler: torch.Tensor,
     return rep_p, rep_q
 
 
-def define_network(input_p: torch.Tensor,
+def function_forward(input_p: torch.Tensor,
                    input_q: torch.Tensor,
                    sigma: torch.Tensor,
                    scaler: torch.Tensor,
@@ -262,43 +315,90 @@ def __init_sigma_value(x_train: TypeInputData, y_train: TypeInputData, log_sigma
     return rep_dim
 
 
-def train(x: TypeInputData,
-          y: TypeInputData,
-          init_log_sigma: float=0,
-          init_sigma_median: bool=False,
-          num_epochs: int=1000):
+def split_data(x: TypeInputData,
+               y: TypeInputData,
+               ratio_train: float = 0.8
+               ) -> typing.Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    # data conversion
+    if isinstance(x, np.ndarray):
+        x__ = torch.Tensor(x)
+    else:
+        x__ = x
+    # end if
+    if isinstance(y, np.ndarray):
+        y__ = torch.Tensor(y)
+    else:
+        y__ = y
+    # end if
+    if ratio_train < 1.0:
+        __split_index = int(len(x) * ratio_train)
+        x_train, x_val = torch.utils.data.random_split(x__, lengths=[__split_index, len(x__)-__split_index])
+        y_train, y_val = torch.utils.data.random_split(y__, lengths=[__split_index, len(x__)-__split_index])
+    else:
+        x_train = x__
+        y_train = y__
+        x_val = None
+        y_val = None
+    # end if
+    return x_train, y_train, x_val, y_val
+
+
+def train(x_data: TypeInputData,
+          y_data: TypeInputData,
+          init_log_sigma: float = 0,
+          init_sigma_median: bool = False,
+          reg: int = 0,
+          num_epochs: int = 1000,
+          lr: float = 0.5,
+          batchsize: int = 200,
+          opt_log: bool = True,
+          ratio_train: float = 0.8):
     # todo optimization with SGD Nesterov momentum
     # todo torch.optim.SGD(params, lr=<required parameter>, momentum=0, dampening=0, weight_decay=0, nesterov=False)
     # with Nesterov momentum
-    assert len(x.shape) == len(y.shape) == 2
-    logger.debug(f'input data N(sample-size)={x.shape[0]}, N(dimension)={x.shape[1]}')
-    # data conversion
-    if isinstance(x, np.ndarray):
-        x_data = torch.Tensor(x)
-    else:
-        x_data = x
-    # end if
-    if isinstance(y, np.ndarray):
-        y_data = torch.Tensor(y)
-    else:
-        y_data = y
-    # end if
+    assert len(x_data.shape) == len(y_data.shape) == 2
+    logger.debug(f'input data N(sample-size)={x_data.shape[0]}, N(dimension)={x_data.shape[1]}')
+    x_train, y_train, x_val, y_val = split_data(x_data, y_data, ratio_train)
 
     # global sigma value of RBF kernel
     log_sigma: torch.Tensor = torch.rand(size=(1,), requires_grad=True)
     # a scale matrix which scales the input matrix X.
     # must be the same size as the input data.
-    scales: torch.Tensor = torch.rand(size=(x.shape[1], ), requires_grad=True)
-    # todo initialization of log-sigma!!
+    scales: torch.Tensor = torch.rand(size=(x_data.shape[1], ), requires_grad=True)
     # __init_sigma_value(x_train=x, y_train=y, log_sigma=log_sigma, init_sigma_median=init_sigma_median)
-    # todo rename forward()
-    mmd2_pq, stat, obj = define_network(input_p=x_data, input_q=y_data, sigma=log_sigma, scaler=scales, reg=0, opt_log=True)
 
+    #t_mmd2, t_obj = self.run_val(X_train, Y_train, batchsize, val_fn)
+    #v_mmd2, v_obj = self.run_val(X_val, Y_val, val_batchsize, val_fn)
+    #log(0, t_mmd2, t_obj, v_mmd2, v_obj, 0)
+    #start_time = time.time()
+    # todo nesterov -> True
+    optimizer = torch.optim.SGD([scales, log_sigma], lr=lr, momentum=0, dampening=0, weight_decay=0, nesterov=False)
     # todo what is standard name of epoch??
+    dataset_train = TwoSampleDataSet(x_train, y_train)
+    dataset_validation = TwoSampleDataSet(x_val, y_val)
     for epoch in range(1, num_epochs + 1):
-        pass
+        # mmd2_pq, stat, obj = function_forward(input_p=x_data, input_q=y_data, sigma=log_sigma, scaler=scales, reg=0, opt_log=True)
+        #obj.backward()
+        #optimizer.step()
+        avg_mmd2, avg_obj = run_train_epoch(dataset_train, batchsize=batchsize, sigma=log_sigma, scaler=scales, reg=reg, opt_log=opt_log)
+        # update the variables
+        optimizer.step()
+        avg_mmd2_val, avg_obj_val = run_validation_epoch(dataset_validation, batchsize=batchsize, sigma=log_sigma, scaler=scales, reg=reg, opt_log=opt_log)
+        logger.info(f'Validation obj-value={avg_obj_val}/MMD^2={avg_mmd2_val} with the current parameter sigma={log_sigma} and scaler')
+        # for epoch in range(1, num_epochs + 1):
+        #     try:
+        #         t_mmd2, t_obj = self.run_train_epoch(
+        #             X_train, Y_train, batchsize, train_fn)
+        #         v_mmd2, v_obj = self.run_val(X_val, Y_val, val_batchsize, val_fn)
+        #         log(epoch, t_mmd2, t_obj, v_mmd2, v_obj, time.time() - start_time)
+        #     except KeyboardInterrupt:
+        #         break
+        #     # end try
+        # # end for
+        # sigma = np.exp(log_sigma.get_value()) if log_sigma is not None else None
 
-    print()
+
+
 
 
 # ---------------------------------------------------------------------------
@@ -326,8 +426,6 @@ def generate_data(n_train: int, n_test: int):
     Y_test = Y[~is_train]
 
     return X_train, Y_train, X_test, Y_test
-
-
 
 
 def main():
