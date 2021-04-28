@@ -527,13 +527,13 @@ class ArdKernelTrainer(object):
                 excerpt = slice(start_idx, start_idx + batchsize)
             yield tuple(a[excerpt] for a in arrays)
 
-    def run_train_epoch(self, X_train, Y_train, batchsize, train_fn) -> typing.Tuple[float, float]:
+    def run_train_epoch(self, X_train, Y_train, batchsize: int, train_fn, is_shuffle: bool = True) -> typing.Tuple[float, float]:
         total_mmd2 = 0
         total_obj = 0
         n_batches = 0
         batches = zip(  # shuffle the two independently
-            self.iterate_minibatches(X_train, batchsize=batchsize, shuffle=True),
-            self.iterate_minibatches(Y_train, batchsize=batchsize, shuffle=True),
+            self.iterate_minibatches(X_train, batchsize=batchsize, shuffle=is_shuffle),
+            self.iterate_minibatches(Y_train, batchsize=batchsize, shuffle=is_shuffle),
         )
         for ((Xbatch,), (Ybatch,)) in batches:
             mmd2, obj = train_fn(Xbatch, Ybatch)
@@ -559,7 +559,6 @@ class ArdKernelTrainer(object):
         # end for
         return total_mmd2 / n_batches, total_obj / n_batches
 
-
     def __train(self,
               X_train: NDArray[(Any, Any), Any],
               Y_train: NDArray[(Any, Any), Any],
@@ -571,7 +570,8 @@ class ArdKernelTrainer(object):
               init_log_sigma=0, opt_sigma=False, init_sigma_median=False,
               num_epochs=10000, batchsize=200, val_batchsize=1000,
               verbose=True, net_version='basic',
-              opt_strat='nesterov_momentum', learning_rate=0.01,
+              opt_strat='nesterov_momentum',
+                learning_rate=0.01,
               log_params=False, init_scales: typing.Optional[np.ndarray] = None,**opt_args):
         # assert in order to check objects are 2nd order Tensor.
         assert X_train.ndim == X_val.ndim == Y_train.ndim == Y_val.ndim == 2
@@ -649,8 +649,6 @@ class ArdKernelTrainer(object):
                             # or (epoch < 1000 and epoch % 50 == 0)
                             or epoch % 100 == 0):
                 logger.info(fmt.format(epoch, t_mmd2, t_obj, v_mmd2, v_obj, int(t), sigma=sigma))
-                # todo delete
-                logger.info(scales.get_value())
             # end if
             tup = (t_mmd2, t_obj, v_mmd2, v_obj, t)
             if opt_sigma:
@@ -666,13 +664,14 @@ class ArdKernelTrainer(object):
         v_mmd2, v_obj = self.run_val(X_val, Y_val, val_batchsize, val_fn)
         log(0, t_mmd2, t_obj, v_mmd2, v_obj, 0)
         start_time = time.time()
-
+        logger.info(f'{0},{t_mmd2},{t_obj},{scales.get_value()},{log_sigma.get_value()}')
         for epoch in range(1, num_epochs + 1):
             try:
                 t_mmd2, t_obj = self.run_train_epoch(
-                    X_train, Y_train, batchsize, train_fn)
+                    X_train, Y_train, batchsize, train_fn, is_shuffle=True)
                 v_mmd2, v_obj = self.run_val(X_val, Y_val, val_batchsize, val_fn)
                 log(epoch, t_mmd2, t_obj, v_mmd2, v_obj, time.time() - start_time)
+                logger.info(f'{epoch},{t_mmd2},{t_obj},{scales.get_value()},{log_sigma.get_value()}')
             except KeyboardInterrupt:
                 break
             # end try
@@ -708,6 +707,9 @@ class ArdKernelTrainer(object):
               ratio_train: float = 0.8,
               init_scales: nptyping.NDArray[(typing.Any,), typing.Any] = None,
               init_sigma_median: bool = False,
+              opt_sigma: bool = True,
+              opt_log: bool = True,
+              opt_strat: str = 'nesterov_momentum',
               x_val = None,
               y_val = None):
         assert len(x) == len(y), 'currently, len(x) and len(y) must be same.'
@@ -736,12 +738,14 @@ class ArdKernelTrainer(object):
             biased=True,
             hotelling_reg=0,
             init_log_sigma=0,
-            opt_sigma=True,
+            opt_sigma=opt_sigma,
+            opt_log=opt_log,
             num_epochs=num_epochs,
             batchsize=batchsize,
             val_batchsize=val_batchsize,
             init_sigma_median=init_sigma_median,
             init_scales=init_scales,
+            opt_strat=opt_strat,
             net_version='scaling')
         self.get_rep = get_rep
         logger.info(f'Trained result: the opt global-sigma: {sigma}')
@@ -849,8 +853,15 @@ def example_ard_kernel():
     init_scale = np.array([0.05, 0.55])
 
     trainer = ArdKernelTrainer()
-    trained_obj = trainer.train(x=x_train, y=y_train, num_epochs=num_epochs, init_scales=init_scale, init_sigma_median=False,
-                                x_val=x_test, y_val=y_test)
+    trained_obj = trainer.train(x=x_train,
+                                y=y_train,
+                                num_epochs=num_epochs,
+                                init_sigma_median=False,
+                                opt_strat='nesterov_momentum',
+                                x_val=x_test,
+                                y_val=y_test,
+                                opt_log=True,
+                                opt_sigma=True)
     trained_obj.to_pickle(path_trained_model)
 
     mmd2, t_value = trainer.compute_mmd(x=x_test, y=y_test, sigma=trained_obj.sigma)

@@ -19,6 +19,7 @@ TypeScaleVector = nptyping.NDArray[(typing.Any, typing.Any), typing.Any]
 
 OBJ_VALUE_MIN_THRESHOLD = torch.tensor([1e-6], dtype=torch.float64)
 
+
 class TwoSampleDataSet(torch.utils.data.Dataset):
     def __init__(self, x: torch.Tensor, y: torch.Tensor):
         self.x = x
@@ -31,6 +32,15 @@ class TwoSampleDataSet(torch.utils.data.Dataset):
 
     def __len__(self):
         return self.length
+
+
+class ScaleLayer(torch.nn.Module):
+    def __init__(self, init_value: TypeInputData, requires_grad: bool = True):
+        super().__init__()
+        self.scale = torch.nn.Parameter(torch.tensor(init_value), requires_grad=requires_grad)
+
+    def forward(self, input):
+        return input * self.scale
 
 
 # ----------------------------------------------------------------------
@@ -176,7 +186,7 @@ def iterate_minibatches(*arrays, batchsize: int, is_shuffle: bool=False):
 def run_train_epoch(dataset: TwoSampleDataSet,
                     batchsize: int,
                     sigma: torch.Tensor,
-                    scaler: torch.Tensor,
+                    scales: torch.Tensor,
                     reg: int,
                     opt_log: bool = True) -> typing.Tuple[torch.Tensor, torch.Tensor]:
     total_mmd2 = 0
@@ -188,7 +198,7 @@ def run_train_epoch(dataset: TwoSampleDataSet,
     # )
     data_loader = torch.utils.data.DataLoader(dataset, batch_size=batchsize, shuffle=True, num_workers=2)
     for xbatch, ybatch in data_loader:
-        mmd2_pq, stat, obj = function_forward(xbatch, ybatch, sigma=sigma, scaler=scaler, reg=reg, opt_log=opt_log)
+        mmd2_pq, stat, obj = function_forward(xbatch, ybatch, sigma=sigma, scaler=scales, reg=reg, opt_log=opt_log)
         assert np.isfinite(mmd2_pq.detach().numpy())
         assert np.isfinite(obj.detach().numpy())
         total_mmd2 += mmd2_pq
@@ -196,6 +206,7 @@ def run_train_epoch(dataset: TwoSampleDataSet,
         n_batches += 1
         # do differentiation now.
         obj.backward()
+        # logger.debug(f'grad-message scales={scales.grad}, log_sigma={sigma.grad}')
 
     # logger.debug(f'[after one epoch] sum(MMD)={total_mmd2}, sum(obj)={total_obj} with N(batch)={n_batches}')
     return total_mmd2 / n_batches, total_obj / n_batches
@@ -232,7 +243,7 @@ def run_validation_epoch(dataset: TwoSampleDataSet,
 def operation_scale_product(scaler: torch.Tensor,
                             input_p: torch.Tensor,
                             input_q: torch.Tensor) -> typing.Tuple[torch.Tensor, torch.Tensor]:
-    rep_p = torch.mul(scaler, input_p)
+    rep_p = torch.  mul(scaler, input_p)
     rep_q = torch.mul(scaler, input_q)
 
     return rep_p, rep_q
@@ -398,35 +409,32 @@ def train(x_train: TypeInputData,
     # end if
     # __init_sigma_value(x_train=x, y_train=y, log_sigma=log_sigma, init_sigma_median=init_sigma_median)
 
-    #t_mmd2, t_obj = self.run_val(X_train, Y_train, batchsize, val_fn)
-    #v_mmd2, v_obj = self.run_val(X_val, Y_val, val_batchsize, val_fn)
-    #log(0, t_mmd2, t_obj, v_mmd2, v_obj, 0)
-    #start_time = time.time()
     dataset_train = TwoSampleDataSet(x_train__, y_train__)
-    dataset_validation = TwoSampleDataSet(x_val__, y_val__)
     # for debug
     val_mmd2_pq, val_stat, val_obj = function_forward(x_val__, y_val__, sigma=log_sigma, scaler=scales, reg=reg, opt_log=opt_log)
     logger.debug(
-        f'Validation at 0. MMD^2 = {val_mmd2_pq}, obj-value = {val_obj} at sigma = {__exp_sigma(log_sigma)}')
-    logger.debug(f'[before optimization] sigma value = {__exp_sigma(log_sigma)}')
+        f'Validation at 0. MMD^2 = {val_mmd2_pq.detach().numpy()}, obj-value = {val_obj.detach().numpy()} at sigma = {__exp_sigma(log_sigma).detach().numpy()}')
+    logger.debug(f'[before optimization] sigma value = {__exp_sigma(log_sigma).detach().numpy()}')
     # set same as Lasagne nesterov_momentum. https://lasagne.readthedocs.io/en/latest/modules/updates.html#lasagne.updates.nesterov_momentum
-    optimizer = torch.optim.SGD([scales, log_sigma], lr=lr, momentum=0.9, nesterov=False)
+    # todo reverse
+    if opt_log:
+        optimizer = torch.optim.SGD([scales, log_sigma], lr=lr, momentum=0.9, nesterov=True)
+    else:
+        optimizer = torch.optim.SGD([scales], lr=lr, momentum=0.9, nesterov=True)
     # for the logging
     fmt = ("{: >6,}: avg train MMD^2 {} obj {},  "
            "avg val MMD^2 {}  obj {}  elapsed: {:,}s")
     fmt += '  sigma: {}'
-
+    fmt += '  scales: {}'
     for epoch in range(1, num_epochs + 1):
-        # mmd2_pq, stat, obj = function_forward(input_p=x_data, input_q=y_data, sigma=log_sigma, scaler=scales, reg=0, opt_log=True)
-        #obj.backward()
-        #optimizer.step()
         optimizer.zero_grad()
-        avg_mmd2, avg_obj = run_train_epoch(dataset_train, batchsize=batchsize, sigma=log_sigma, scaler=scales, reg=reg, opt_log=opt_log)
+        avg_mmd2, avg_obj = run_train_epoch(dataset_train, batchsize=batchsize, sigma=log_sigma, scales=scales, reg=reg, opt_log=opt_log)
         # update the variables
         optimizer.step()
         val_mmd2_pq, val_stat, val_obj = function_forward(x_val__, y_val__, sigma=log_sigma, scaler=scales, reg=reg, opt_log=opt_log)
+        # todo delete
         if (epoch in {0, 5, 25, 50}  or epoch % 100 == 0):
-            logger.info(fmt.format(epoch, avg_mmd2, avg_obj, val_mmd2_pq, val_obj, 0.0, log_sigma))
+           logger.info(fmt.format(epoch, avg_mmd2.detach().numpy(), avg_obj.detach().numpy(), val_mmd2_pq.detach().numpy(), val_obj.detach().numpy(), 0.0, __exp_sigma(log_sigma).detach().numpy(), scales.detach().numpy()))
         # end if
         # for epoch in range(1, num_epochs + 1):
         #     try:
@@ -439,12 +447,10 @@ def train(x_train: TypeInputData,
         #     # end try
         # # end for
         # sigma = np.exp(log_sigma.get_value()) if log_sigma is not None else None
-
-
-
-
+    # end for
 
 # ---------------------------------------------------------------------------
+
 
 def sample_SG(n: int, dim: int, rs=None) -> typing.Tuple[TypeInputData, TypeInputData]:
     from sklearn.utils import check_random_state
@@ -474,10 +480,10 @@ def generate_data(n_train: int, n_test: int):
 def main():
     n_train = 1500
     n_test = 500
-    num_epochs = 100
+    num_epochs = 1000
     path_trained_model = './trained_mmd.pickle'
 
-    np.random.seed(np.random.randint(2 ** 31))
+    np.random.seed(0)
     #x_train, y_train, x_test, y_test = generate_data(n_train=n_train, n_test=n_test)
     array_obj = np.load('./interfaces/eval_array.npz')
     x_train = array_obj['x']
@@ -487,7 +493,7 @@ def main():
     init_scale = np.array([0.05, 0.55])
 
     train(x_train, y_train, num_epochs=num_epochs, init_log_sigma=0.0, init_scale=init_scale,
-          x_val=x_test, y_val=y_test)
+          x_val=x_test, y_val=y_test, opt_log=False)
 
 
 if __name__ == '__main__':
