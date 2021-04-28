@@ -8,6 +8,7 @@ import typing
 import dataclasses
 
 import nptyping
+import numpy
 import numpy as np
 import lasagne
 from six import exec_
@@ -479,6 +480,7 @@ class ArdKernelTrainer(object):
         # Returns a list of Theano shared variables or expressions that parameterize the layer.
         params: typing.List[theano.tensor.sharedvar.TensorSharedVariable] = \
             lasagne.layers.get_all_params([net_p, net_q], trainable=True)
+        sacles: theano.tensor.sharedvar.TensorSharedVariable = [p for p in params if p.name == 'scales'][0]
         if opt_sigma:
             params.append(log_sigma)
         # end if
@@ -499,7 +501,7 @@ class ArdKernelTrainer(object):
         get_rep = theano.function(inputs=[input_p], outputs=rep_p)
         print("done", file=sys.stderr)
 
-        return params, train_fn, val_fn, get_rep, log_sigma
+        return params, train_fn, val_fn, get_rep, log_sigma, sacles
 
 
     ################################################################################
@@ -570,7 +572,7 @@ class ArdKernelTrainer(object):
               num_epochs=10000, batchsize=200, val_batchsize=1000,
               verbose=True, net_version='basic',
               opt_strat='nesterov_momentum', learning_rate=0.01,
-              log_params=False, **opt_args):
+              log_params=False, init_scales: typing.Optional[np.ndarray] = None,**opt_args):
         # assert in order to check objects are 2nd order Tensor.
         assert X_train.ndim == X_val.ndim == Y_train.ndim == Y_val.ndim == 2
         dim = X_train.shape[1]
@@ -585,7 +587,7 @@ class ArdKernelTrainer(object):
             print("Using sigma = {}".format(
                 'median' if init_sigma_median else np.exp(init_log_sigma)))
         # definition of graph
-        params, train_fn, val_fn, get_rep, log_sigma = self.setup(
+        params, train_fn, val_fn, get_rep, log_sigma, scales = self.setup(
             dim, criterion=criterion, linear_kernel=linear_kernel,
             biased=biased, streaming_est=streaming_est,
             hotelling_reg=hotelling_reg,
@@ -612,6 +614,12 @@ class ArdKernelTrainer(object):
             print("{:.3g}".format(np.exp(log_sigma.get_value())))
         else:
             rep_dim = get_rep(X_train[:1]).shape[1]
+        # end if
+
+        if init_scales is not None:
+            logger.info('Set initial scales-value.')
+            assert X_train.shape[1] == Y_train.shape[1] == init_scales.shape[0]
+            scales.set_value(init_scales)
         # end if
 
         print("Input dim {}, representation dim {}".format(
@@ -641,6 +649,8 @@ class ArdKernelTrainer(object):
                             # or (epoch < 1000 and epoch % 50 == 0)
                             or epoch % 100 == 0):
                 logger.info(fmt.format(epoch, t_mmd2, t_obj, v_mmd2, v_obj, int(t), sigma=sigma))
+                # todo delete
+                logger.info(scales.get_value())
             # end if
             tup = (t_mmd2, t_obj, v_mmd2, v_obj, t)
             if opt_sigma:
@@ -695,16 +705,27 @@ class ArdKernelTrainer(object):
               num_epochs: int = 500,
               batchsize: int = 1000,
               val_batchsize: int = 1000,
-              ratio_train: float = 0.8):
+              ratio_train: float = 0.8,
+              init_scales: nptyping.NDArray[(typing.Any,), typing.Any] = None,
+              init_sigma_median: bool = False,
+              x_val = None,
+              y_val = None):
         assert len(x) == len(y), 'currently, len(x) and len(y) must be same.'
-        n_train = int(len(x) * ratio_train)
-        np.random.shuffle(x)
-        np.random.shuffle(y)
+        if x_val is None or y_val is None:
+            n_train = int(len(x) * ratio_train)
+            np.random.shuffle(x)
+            np.random.shuffle(y)
 
-        x_train = x[:n_train]
-        x_val = x[n_train:]
-        y_train = y[:n_train]
-        y_val = y[n_train:]
+            x_train = x[:n_train]
+            x_val = x[n_train:]
+            y_train = y[:n_train]
+            y_val = y[n_train:]
+        else:
+            x_train = x
+            y_train = y
+            x_val = x_val
+            y_val = y_val
+        # end if
 
         params, param_names, get_rep, value_log, sigma = self.__train(
             X_train=x_train,
@@ -719,7 +740,8 @@ class ArdKernelTrainer(object):
             num_epochs=num_epochs,
             batchsize=batchsize,
             val_batchsize=val_batchsize,
-            init_sigma_median=True,
+            init_sigma_median=init_sigma_median,
+            init_scales=init_scales,
             net_version='scaling')
         self.get_rep = get_rep
         logger.info(f'Trained result: the opt global-sigma: {sigma}')
@@ -817,10 +839,18 @@ def example_ard_kernel():
     path_trained_model = './trained_mmd.pickle'
 
     np.random.seed(np.random.randint(2**31))
-    x_train, y_train, x_test, y_test = generate_data(n_train=n_train, n_test=n_test)
+    # x_train, y_train, x_test, y_test = generate_data(n_train=n_train, n_test=n_test)
+    # dict_o = {'x': x_train, 'y': y_train, 'x_test': x_test, 'y_test': y_test}
+    array_obj = numpy.load('./eval_array.npz')
+    x_train = array_obj['x']
+    y_train = array_obj['y']
+    x_test = array_obj['x_test']
+    y_test = array_obj['y_test']
+    init_scale = np.array([0.05, 0.55])
 
     trainer = ArdKernelTrainer()
-    trained_obj = trainer.train(x=x_train, y=y_train, num_epochs=num_epochs)
+    trained_obj = trainer.train(x=x_train, y=y_train, num_epochs=num_epochs, init_scales=init_scale, init_sigma_median=False,
+                                x_val=x_test, y_val=y_test)
     trained_obj.to_pickle(path_trained_model)
 
     mmd2, t_value = trainer.compute_mmd(x=x_test, y=y_test, sigma=trained_obj.sigma)
