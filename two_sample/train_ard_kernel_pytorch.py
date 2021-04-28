@@ -481,6 +481,29 @@ def generate_data(n_train: int, n_test: int):
 
     return X_train, Y_train, X_test, Y_test
 
+def devel_test():
+    n_train = 1500
+    n_test = 500
+    num_epochs = 100
+    path_trained_model = './trained_mmd.pickle'
+
+    np.random.seed(np.random.randint(2**31))
+    #x_train, y_train, x_test, y_test = generate_data(n_train=n_train, n_test=n_test)
+    array_obj = np.load('./interfaces/eval_array.npz')
+    x_train = array_obj['x']
+    y_train = array_obj['y']
+    x_test = array_obj['x_test']
+    y_test = array_obj['y_test']
+    init_scale = np.array([0.05, 0.55])
+
+    train(x_train,
+          y_train,
+          num_epochs=num_epochs,
+          init_log_sigma=0.0,
+          init_scale=init_scale,
+          x_val=x_test, y_val=y_test,
+          opt_log=True)
+
 
 def main():
     n_train = 1500

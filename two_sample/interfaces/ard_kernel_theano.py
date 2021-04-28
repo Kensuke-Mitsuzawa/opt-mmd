@@ -386,7 +386,7 @@ class ArdKernelTrainer(object):
                      input_q: theano.tensor.TensorVariable,
                      dim: int,
                      criterion='ratio', biased=True, streaming_est=False,
-                     linear_kernel=False, log_sigma=0, hotelling_reg=0,
+                     linear_kernel=False, log_sigma: float=0, hotelling_reg=0,
                      opt_log=True, batchsize=None,
                      net_version='nothing'):
 
@@ -446,7 +446,7 @@ class ArdKernelTrainer(object):
               opt_log=True,
               linear_kernel=False,
               opt_sigma=False,
-              init_log_sigma=0,
+              init_log_sigma: float=0,
               net_version='basic',
               hotelling_reg=0,
               strat='nesterov_momentum',
@@ -561,19 +561,28 @@ class ArdKernelTrainer(object):
         return total_mmd2 / n_batches, total_obj / n_batches
 
     def __train(self,
-              X_train: NDArray[(Any, Any), Any],
-              Y_train: NDArray[(Any, Any), Any],
-              X_val: NDArray[(Any, Any), Any],
-              Y_val: NDArray[(Any, Any), Any],
-              criterion='ratio',
-              biased=True, streaming_est=False, opt_log=True,
-              linear_kernel=False, hotelling_reg=0,
-              init_log_sigma=0, opt_sigma=False, init_sigma_median=False,
-              num_epochs=10000, batchsize=200, val_batchsize=1000,
-              verbose=True, net_version='basic',
-              opt_strat='nesterov_momentum',
-                learning_rate=0.01,
-              log_params=False, init_scales: typing.Optional[np.ndarray] = None,**opt_args):
+                X_train: NDArray[(Any, Any), Any],
+                Y_train: NDArray[(Any, Any), Any],
+                X_val: NDArray[(Any, Any), Any],
+                Y_val: NDArray[(Any, Any), Any],
+                criterion='ratio',
+                biased=True,
+                streaming_est=False,
+                opt_log=True,
+                linear_kernel=False,
+                hotelling_reg=0,
+                init_log_sigma: float=0.0,
+                opt_sigma=False,
+                init_sigma_median=False,
+                num_epochs=10000,
+                batchsize=200,
+                val_batchsize=1000,
+                verbose=True,
+                net_version='basic',
+                opt_strat='nesterov_momentum',
+                learning_rate: float=0.01,
+                log_params: bool=False,
+                init_scales: typing.Optional[np.ndarray] = None, **opt_args):
         # assert in order to check objects are 2nd order Tensor.
         assert X_train.ndim == X_val.ndim == Y_train.ndim == Y_val.ndim == 2
         dim = X_train.shape[1]
@@ -592,7 +601,8 @@ class ArdKernelTrainer(object):
             dim, criterion=criterion, linear_kernel=linear_kernel,
             biased=biased, streaming_est=streaming_est,
             hotelling_reg=hotelling_reg,
-            init_log_sigma=init_log_sigma, opt_sigma=opt_sigma,
+            init_log_sigma=init_log_sigma,
+            opt_sigma=opt_sigma,
             opt_log=opt_log, net_version=net_version,
             strat=opt_strat, learning_rate=learning_rate, **opt_args)
 
@@ -710,11 +720,34 @@ class ArdKernelTrainer(object):
               init_sigma_median: bool = False,
               opt_sigma: bool = True,
               opt_log: bool = True,
-              opt_strat: str = 'nesterov_momentum',
-              x_val = None,
-              y_val = None,
-              init_log_sigma: float = 0.0):
+              opt_strategy: str = 'nesterov_momentum',
+              x_val=None,
+              y_val=None,
+              init_log_sigma: float = 0.0) -> TrainedArdKernel:
+        '''optimize parameters based on t-value.
+
+        :param x: training data
+        :param y: training data
+        :param num_epochs: epoch size
+        :param batchsize: batch size
+        :param val_batchsize: batch size for validation
+        :param ratio_train: a ratio to split data into (train, val). Not used when x_val, y_val are given.
+        :param init_scales: initial value for a scales vector. The dimension size should be same as the one of data.
+        :param init_sigma_median: initialize sigma parameter with median.
+        :param opt_sigma: If True, then optimization of sigma too, False not.
+        :param opt_log: If True, an objective value is -(T.log(T.largest(stat, 1e-6)) + reg; False stat + reg.
+        :param opt_strategy: a key name of opt-strategies. See a doc. of Lasagne. https://lasagne.readthedocs.io/en/latest/modules/updates.html
+        :param x_val: validation data corresponding to x.
+        :param y_val: validation data corresponding to y.
+        :param init_log_sigma: an initial value for sigma.
+        :return:
+        '''
         assert len(x) == len(y), 'currently, len(x) and len(y) must be same.'
+        if init_scales is not None:
+            assert init_scales.shape[-1] == x.shape[1], \
+                f'unmatched dim. size. data has {x.shape[1]}, init_scales has {init_scales.shape[0]}'
+        # end if
+
         if x_val is None or y_val is None:
             n_train = int(len(x) * ratio_train)
             np.random.shuffle(x)
@@ -747,7 +780,7 @@ class ArdKernelTrainer(object):
             val_batchsize=val_batchsize,
             init_sigma_median=init_sigma_median,
             init_scales=init_scales,
-            opt_strat=opt_strat,
+            opt_strat=opt_strategy,
             net_version='scaling')
         self.get_rep = get_rep
         logger.info(f'Trained result: the opt global-sigma: {sigma}')
@@ -838,15 +871,11 @@ def generate_data(n_train: int, n_test: int):
     return X_train, Y_train, X_test, Y_test
 
 
-def example_ard_kernel():
-    n_train = 1500
-    n_test = 500
+def devel_test():
     num_epochs = 100
-    path_trained_model = './trained_mmd.pickle'
+    path_trained_model = './save_test.npz'
 
     np.random.seed(np.random.randint(2**31))
-    # x_train, y_train, x_test, y_test = generate_data(n_train=n_train, n_test=n_test)
-    # dict_o = {'x': x_train, 'y': y_train, 'x_test': x_test, 'y_test': y_test}
     array_obj = numpy.load('./eval_array.npz')
     x_train = array_obj['x']
     y_train = array_obj['y']
@@ -859,13 +888,53 @@ def example_ard_kernel():
                                 y=y_train,
                                 num_epochs=num_epochs,
                                 init_sigma_median=False,
-                                opt_strat='nesterov_momentum',
+                                opt_strategy='nesterov_momentum',
                                 x_val=x_test,
                                 y_val=y_test,
                                 opt_log=True,
                                 opt_sigma=True,
                                 init_scales=init_scale,
                                 init_log_sigma=0.0)
+    trained_obj.to_pickle(path_trained_model)
+
+    import math
+    logger.info(f'exp(sigma)={math.exp(trained_obj.sigma)} scales={trained_obj.scale_value}')
+
+    assert np.linalg.norm(trained_obj.scale_value[0] - trained_obj.scale_value[1]) < 5
+    assert 1.0 < math.exp(trained_obj.sigma) < 1.5
+
+    mmd2, t_value = trainer.compute_mmd(x=x_test, y=y_test, sigma=trained_obj.sigma)
+    logger.info(f'MMD^2 = {mmd2}')
+
+    try:
+        import shogun
+        logger.info('running 2 sample test...')
+        p_val, stat, null_samps = trainer.test_mmd(x_test, y_test, trained_obj.sigma)
+        logger.info("p-value: {}".format(p_val))
+    except ImportError:
+        logger.info('Skip to run MMD test because of missing Shogun package.')
+
+    os.remove(path_trained_model)
+
+
+def example_ard_kernel():
+    n_train = 1500
+    n_test = 500
+    num_epochs = 100
+    path_trained_model = './trained_mmd.pickle'
+
+    np.random.seed(np.random.randint(2**31))
+    x_train, y_train, x_test, y_test = generate_data(n_train=n_train, n_test=n_test)
+    trainer = ArdKernelTrainer()
+    trained_obj = trainer.train(x=x_train,
+                                y=y_train,
+                                num_epochs=num_epochs,
+                                init_sigma_median=False,
+                                opt_strategy='nesterov_momentum',
+                                x_val=x_test,
+                                y_val=y_test,
+                                opt_log=True,
+                                opt_sigma=True)
     trained_obj.to_pickle(path_trained_model)
     import math
     logger.info(f'sigma={math.exp(trained_obj.sigma)} scales={trained_obj.scale_value}')
@@ -883,4 +952,5 @@ def example_ard_kernel():
 
 
 if __name__ == '__main__':
-    example_ard_kernel()
+    devel_test()
+    # example_ard_kernel()
