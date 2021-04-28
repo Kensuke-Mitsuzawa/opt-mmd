@@ -527,7 +527,7 @@ class ArdKernelTrainer(object):
                 excerpt = slice(start_idx, start_idx + batchsize)
             yield tuple(a[excerpt] for a in arrays)
 
-    def run_train_epoch(self, X_train, Y_train, batchsize: int, train_fn, is_shuffle: bool = True) -> typing.Tuple[float, float]:
+    def run_train_epoch(self, X_train, Y_train, batchsize: int, train_fn, log_sigma, scales, is_shuffle: bool = True) -> typing.Tuple[float, float]:
         total_mmd2 = 0
         total_obj = 0
         n_batches = 0
@@ -542,6 +542,7 @@ class ArdKernelTrainer(object):
             total_mmd2 += mmd2
             total_obj += obj
             n_batches += 1
+            # print(log_sigma.eval(), scales.eval()) TODO delete
         return total_mmd2 / n_batches, total_obj / n_batches
 
     def run_val(self, X_val, Y_val, batchsize, val_fn) -> typing.Tuple[float, float]:
@@ -668,7 +669,7 @@ class ArdKernelTrainer(object):
         for epoch in range(1, num_epochs + 1):
             try:
                 t_mmd2, t_obj = self.run_train_epoch(
-                    X_train, Y_train, batchsize, train_fn, is_shuffle=True)
+                    X_train, Y_train, batchsize, train_fn, log_sigma, scales, is_shuffle=True)
                 v_mmd2, v_obj = self.run_val(X_val, Y_val, val_batchsize, val_fn)
                 log(epoch, t_mmd2, t_obj, v_mmd2, v_obj, time.time() - start_time)
                 # logger.info(f'{epoch},{t_mmd2},{t_obj},{scales.get_value()},{log_sigma.get_value()}')
@@ -702,7 +703,7 @@ class ArdKernelTrainer(object):
               x: nptyping.NDArray[(typing.Any, typing.Any), typing.Any],
               y: nptyping.NDArray[(typing.Any, typing.Any), typing.Any],
               num_epochs: int = 500,
-              batchsize: int = 1000,
+              batchsize: int = 200,
               val_batchsize: int = 1000,
               ratio_train: float = 0.8,
               init_scales: nptyping.NDArray[(typing.Any,), typing.Any] = None,
@@ -711,7 +712,8 @@ class ArdKernelTrainer(object):
               opt_log: bool = True,
               opt_strat: str = 'nesterov_momentum',
               x_val = None,
-              y_val = None):
+              y_val = None,
+              init_log_sigma: float = 0.0):
         assert len(x) == len(y), 'currently, len(x) and len(y) must be same.'
         if x_val is None or y_val is None:
             n_train = int(len(x) * ratio_train)
@@ -737,7 +739,7 @@ class ArdKernelTrainer(object):
             criterion='ratio',
             biased=True,
             hotelling_reg=0,
-            init_log_sigma=0,
+            init_log_sigma=init_log_sigma,
             opt_sigma=opt_sigma,
             opt_log=opt_log,
             num_epochs=num_epochs,
@@ -851,6 +853,8 @@ def example_ard_kernel():
     x_test = array_obj['x_test']
     y_test = array_obj['y_test']
     trainer = ArdKernelTrainer()
+
+    init_scale = np.array([0.05, 0.55])
     trained_obj = trainer.train(x=x_train,
                                 y=y_train,
                                 num_epochs=num_epochs,
@@ -859,8 +863,12 @@ def example_ard_kernel():
                                 x_val=x_test,
                                 y_val=y_test,
                                 opt_log=True,
-                                opt_sigma=True)
+                                opt_sigma=True,
+                                init_scales=init_scale,
+                                init_log_sigma=0.0)
     trained_obj.to_pickle(path_trained_model)
+    import math
+    logger.info(f'sigma={math.exp(trained_obj.sigma)} scales={trained_obj.scale_value}')
 
     mmd2, t_value = trainer.compute_mmd(x=x_test, y=y_test, sigma=trained_obj.sigma)
     logger.info(f'MMD^2 = {mmd2}')

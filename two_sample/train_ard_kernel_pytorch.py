@@ -183,7 +183,8 @@ def iterate_minibatches(*arrays, batchsize: int, is_shuffle: bool=False):
         yield tuple(a[excerpt] for a in arrays)
 
 
-def run_train_epoch(dataset: TwoSampleDataSet,
+def run_train_epoch(optimizer,
+                    dataset: TwoSampleDataSet,
                     batchsize: int,
                     sigma: torch.Tensor,
                     scales: torch.Tensor,
@@ -206,6 +207,10 @@ def run_train_epoch(dataset: TwoSampleDataSet,
         n_batches += 1
         # do differentiation now.
         obj.backward()
+        #
+        optimizer.step()
+        optimizer.zero_grad()
+        # print(scales.detach().numpy(), sigma.detach().numpy())
         # logger.debug(f'grad-message scales={scales.grad}, log_sigma={sigma.grad}')
 
     # logger.debug(f'[after one epoch] sum(MMD)={total_mmd2}, sum(obj)={total_obj} with N(batch)={n_batches}')
@@ -428,9 +433,9 @@ def train(x_train: TypeInputData,
     fmt += '  scales: {}'
     for epoch in range(1, num_epochs + 1):
         optimizer.zero_grad()
-        avg_mmd2, avg_obj = run_train_epoch(dataset_train, batchsize=batchsize, sigma=log_sigma, scales=scales, reg=reg, opt_log=opt_log)
+        avg_mmd2, avg_obj = run_train_epoch(optimizer, dataset_train, batchsize=batchsize, sigma=log_sigma, scales=scales, reg=reg, opt_log=opt_log)
         # update the variables
-        optimizer.step()
+        # optimizer.step()
         val_mmd2_pq, val_stat, val_obj = function_forward(x_val__, y_val__, sigma=log_sigma, scaler=scales, reg=reg, opt_log=opt_log)
         # todo delete
         if (epoch in {0, 5, 25, 50}  or epoch % 100 == 0):
@@ -480,10 +485,10 @@ def generate_data(n_train: int, n_test: int):
 def main():
     n_train = 1500
     n_test = 500
-    num_epochs = 1000
+    num_epochs = 100
     path_trained_model = './trained_mmd.pickle'
 
-    np.random.seed(0)
+    np.random.seed(np.random.randint(2**31))
     #x_train, y_train, x_test, y_test = generate_data(n_train=n_train, n_test=n_test)
     array_obj = np.load('./interfaces/eval_array.npz')
     x_train = array_obj['x']
@@ -492,8 +497,13 @@ def main():
     y_test = array_obj['y_test']
     init_scale = np.array([0.05, 0.55])
 
-    train(x_train, y_train, num_epochs=num_epochs, init_log_sigma=0.0, init_scale=init_scale,
-          x_val=x_test, y_val=y_test, opt_log=False)
+    train(x_train,
+          y_train,
+          num_epochs=num_epochs,
+          init_log_sigma=0.0,
+          init_scale=init_scale,
+          x_val=x_test, y_val=y_test,
+          opt_log=True)
 
 
 if __name__ == '__main__':
