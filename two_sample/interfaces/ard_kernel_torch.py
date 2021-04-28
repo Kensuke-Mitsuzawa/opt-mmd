@@ -203,7 +203,7 @@ class MMD(object):
 
 
 # ----------------------------------------------------------------------
-# a procedure in an epoch
+
 
 class MmdArdTrainer(object):
     def __init__(self, lr: float = 0.01, opt_sigma: bool = True, opt_log: bool = True, init_sigma_median: bool = True):
@@ -227,7 +227,8 @@ class MmdArdTrainer(object):
             assert data.shape[1] == init_scale.shape[0]
             scales = torch.tensor(init_scale, requires_grad=True)
         # end if
-        return scales
+        scales__ = scales.to(device)
+        return scales__
 
     def run_train_epoch(self,
                         optimizer: torch.optim.SGD,
@@ -349,7 +350,12 @@ class MmdArdTrainer(object):
             x_val__ = self.to_tensor(x_val)
             y_val__ = self.to_tensor(y_val)
         # end if
-        return x_train__, y_train__, x_val__, y_val__
+        x_train__d = x_train__.to(device)
+        y_train__d = y_train__.to(device)
+        x_val__d = x_val__.to(device)
+        y_val__d = y_val__.to(device)
+
+        return x_train__d, y_train__d, x_val__d, y_val__d
 
     @staticmethod
     def __exp_sigma(sigma: torch.Tensor) -> torch.Tensor:
@@ -365,8 +371,9 @@ class MmdArdTrainer(object):
         else:
             log_sigma: torch.Tensor = torch.rand(size=(1,), requires_grad=True)
         # end if
+        log_sigma_ = log_sigma.to(device)
 
-        return log_sigma
+        return log_sigma_
 
     def log_message(self, epoch: int, avg_mmd2: Tensor, avg_obj: Tensor, val_mmd2_pq: Tensor, val_obj: Tensor):
         fmt = ("{: >6,}: avg train MMD^2 {} obj {},  "
