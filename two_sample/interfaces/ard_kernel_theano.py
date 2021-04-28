@@ -664,14 +664,14 @@ class ArdKernelTrainer(object):
         v_mmd2, v_obj = self.run_val(X_val, Y_val, val_batchsize, val_fn)
         log(0, t_mmd2, t_obj, v_mmd2, v_obj, 0)
         start_time = time.time()
-        logger.info(f'{0},{t_mmd2},{t_obj},{scales.get_value()},{log_sigma.get_value()}')
+        # logger.info(f'{0},{t_mmd2},{t_obj},{scales.get_value()},{log_sigma.get_value()}')
         for epoch in range(1, num_epochs + 1):
             try:
                 t_mmd2, t_obj = self.run_train_epoch(
                     X_train, Y_train, batchsize, train_fn, is_shuffle=True)
                 v_mmd2, v_obj = self.run_val(X_val, Y_val, val_batchsize, val_fn)
                 log(epoch, t_mmd2, t_obj, v_mmd2, v_obj, time.time() - start_time)
-                logger.info(f'{epoch},{t_mmd2},{t_obj},{scales.get_value()},{log_sigma.get_value()}')
+                # logger.info(f'{epoch},{t_mmd2},{t_obj},{scales.get_value()},{log_sigma.get_value()}')
             except KeyboardInterrupt:
                 break
             # end try
@@ -850,8 +850,6 @@ def example_ard_kernel():
     y_train = array_obj['y']
     x_test = array_obj['x_test']
     y_test = array_obj['y_test']
-    init_scale = np.array([0.05, 0.55])
-
     trainer = ArdKernelTrainer()
     trained_obj = trainer.train(x=x_train,
                                 y=y_train,
